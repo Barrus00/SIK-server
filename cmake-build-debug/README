@@ -1,0 +1,30 @@
+# SIK1 Tests
+Tests for the first task.
+
+To run the tests:
+- Compile your solution anywhere
+- Run `/path/to/serwer test_static/ correlated.txt 1234` where `/path/to/serwer` is the path to the server and 1234 is
+  the port you want to run the server on. Do this in the directory with the tests.
+- Run `python3 test-runner.py 1234` where 1234 is the same port that you selected in the previous step.
+
+If a test freezes you can skip it by pressing CTRL+C. The program will continue to the next test.
+
+
+# Some other things to look out for
+
+The tests only test the HTTP interface. You also must make sure that your program exits with status code 1 if it can
+not load the redirects file, find the web root directory or bind to the port. I recommend performing the following
+manual tests:
+
+- Ensuring `./serwer test_static/ NonExistingPath 1234; echo $?` prints 1
+- Ensuring `./serwer NonExistingPath correlated.txt 1234; echo $?` prints 1
+- Making sure your program works with an empty correlated server list file:
+  `touch empty.txt; ./serwer test_static/ empty.txt 1234; echo $?` (should hang and start)
+- Making sure your program returns 1 when trying to bind to an already used port:
+  ```
+  ./serwer test_static/ empty.txt 1234 &
+  ./serwer test_static/ empty.txt 1234; echo $?
+  kilall server
+  ```
+
+Of course the tests are not exhaustive and your program still may contain bugs. Good luck!

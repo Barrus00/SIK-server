@@ -1,0 +1,24 @@
+#IncludeRegexLine: ^[ 	]*[#%][ 	]*(include|import)[ 	]*[<"]([^">]+)([">])
+
+#IncludeRegexScan: ^.*$
+
+#IncludeRegexComplain: ^$
+
+#IncludeRegexTransform: 
+
+/home/barrus/Studia/SiK/ZAD-1_poprawa/err.cpp
+errno.h
+-
+stdio.h
+-
+stdlib.h
+-
+stdarg.h
+-
+string.h
+-
+err.h
+/home/barrus/Studia/SiK/ZAD-1_poprawa/err.h
+
+/home/barrus/Studia/SiK/ZAD-1_poprawa/err.h
+
