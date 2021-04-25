@@ -22,8 +22,10 @@
 #define C_SERV_ERROR 500
 #define C_BAD_METH 501
 
+
 #define BUFF_SIZE 4096
 #define PORT_NUM 8080
+#define TIMEOUT 45
 #define debug(x)  if (debug) { \
                         std::cerr << x << std::endl; \
                    }
@@ -47,7 +49,7 @@ namespace {
     };
 
     struct base_dir_exception : public std::exception {
-        const char * what() const throw() {
+         const char * what() const throw() {
             return "Base directory not found!";
         }
     };
@@ -110,6 +112,14 @@ public:
 
         client_buf = __gnu_cxx::stdio_filebuf<char>(client_socket, std::ios::in);
 
+        struct timeval timeout;
+        timeout.tv_sec = TIMEOUT;
+        timeout.tv_usec = 0;
+
+        if (setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout)) < 0) {
+            syserr("Creating timeout on client socket");
+        }
+
         if (client_socket < 0) {
             syserr("Accepting client");
         }
@@ -144,7 +154,8 @@ public:
 
     void send_file(const char *file_path) const {
         FILE *file_ = fopen(file_path, "r");
-        int len = 0;
+        int len;
+
         do {
             len = sendfile(client_socket, fileno(file_), NULL, BUFF_SIZE);
 
@@ -233,14 +244,9 @@ public:
                     }
                 }
             }
-            else {
-                std::cerr << "Corelated servers file not found or cannot be opened!\n";
-                exit(EXIT_FAILURE);
-            }
         }
         else {
-            std::cerr << "Corelated servers file not found or cannot be opened!\n";
-            exit(EXIT_FAILURE);
+            throw corelated_servers_exception();
         }
     }
 
@@ -278,33 +284,53 @@ public:
 };
 
 class HTTP_request {
-    Codes_detailed codesDetailed;
-
 public:
+    Codes_detailed codesDetailed;
     std::string method;
     std::string file;
     int code;
     bool kill;
     bool appeared[2];
 
-    HTTP_request() : code(C_REQ_ERROR), kill(false), appeared{false, false} {};
+    //Empty request is invalid, so we have to set the flags as if error occured already.
+    HTTP_request() : code(C_REQ_ERROR), kill(true), appeared{false, false} {};
 
-    bool check_if_valid_line(const std::string& line) {
-        int len = line.length();
-
-        return line[len - 1] == '\r';
-    }
-
+    //Get a line to parse, and
     bool parse_line(const std::string& line) {
         // If method is empty, then we know that we've just started parsing,
         // so we need to parse this line as start-line.
         if (method.empty()) {
+            kill = false;
+
             return parse_start_line(line);
         }
         // Otherwise, we parse it as the header.
         else {
             return parse_header_line(line);
         }
+    }
+
+    std::string create_response(std::uintmax_t f_size) {
+        std::ostringstream response;
+
+        response << "HTTP/1.1 " << code << " " << codesDetailed.get_description(code) << CRLF;
+
+        if (code == 200) {
+            response << "Content-type: application/octet-stream" << CRLF;
+            response << "Content-length: " << f_size << CRLF;
+        }
+
+        if (kill) {
+            response << "Connection: close" << CRLF;
+        }
+
+        response << "Server: SiK-Zad1" << CRLF;
+
+        if (code != 302) {
+            response << CRLF;
+        }
+
+        return response.str();
     }
 
     bool parse_start_line(const std::string& start_line) {
@@ -342,11 +368,20 @@ public:
             return true;
         }
         else {
-            debug("REGEX NOT MATCHED :(");
+            debug("START-LINE REGEX NOT MATCHED");
             set_error(C_REQ_ERROR);
 
             return false;
         }
+    }
+
+private:
+    //Check if the line ends with CRLF. (We know that getline function, trims the newline char,
+    //so we have to check if the last is '\r').
+    bool check_if_valid_line(const std::string& line) {
+        int len = line.length();
+
+        return line[len - 1] == '\r';
     }
 
     void set_error(int err_code) {
@@ -370,14 +405,17 @@ public:
         std::string h_name, h_value;
         std::smatch groups;
 
+        //Try to match the header regex, and save submatches into "groups".
         if (std::regex_match(header, groups, header_pattern)) {
-            h_name = groups[1].str();
+            h_name = groups[1].str();       //Save the first submatch which is the header name.
 
             debug("CONTENT NAME: " << h_name)
 
+            //Check if there is more than one submatch, if so, then we know that there is a header-value associated
+            //with the header name.
             if (groups.length() > 2) {
                 h_value = groups[2].str();
-                r_trim(h_value);
+                r_trim(h_value);            //Remove white spaces from the right end of the string.
 
                 debug("CONTENT VALUE: " << h_value)
             }
@@ -395,9 +433,9 @@ public:
 
                 if (h_value == "close") {
                     kill = true;
-
-                    return true;
                 }
+
+                return true;
             }
             else if (std::regex_match(h_name, CONTENT_L)) {
                 if (appeared[1]) {
@@ -410,7 +448,7 @@ public:
 
                 appeared[1] = true;
 
-                //If content-value is different than 0, then we should mark this request as failed one.
+                //If content-length value is different than 0, then we should mark this request as failed one.
                 if (std::regex_match(h_value, ZERO)) {
                     return true;
                 }
@@ -433,30 +471,6 @@ public:
         }
     }
 
-    std::string send_response(std::uintmax_t f_size) {
-        std::ostringstream response;
-
-        response << "HTTP/1.1 " << code << " " << codesDetailed.get_description(code) << CRLF;
-
-        if (code == 200) {
-            response << "Content-type: application/octet-stream" << CRLF;
-            response << "Content-length: " << f_size << CRLF;
-        }
-
-        if (kill) {
-            response << "Connection: close" << CRLF;
-        }
-
-        response << "Server: SiK-Zad1" << CRLF;
-
-        if (code != 302) {
-            response << CRLF;
-        }
-
-        std::cerr << response.str();
-
-        return response.str();
-    }
 };
 
 class TCP_Server {
@@ -475,7 +489,8 @@ public:
         server_socket.bind_sock(server_address);
         server_socket.start_listen(5);
 
-        DisplayDirectoryTreeImp(this->base_dir.root_path, 0);
+        std::clog << "Sever created with port: " << port_num << std::endl;
+        std::clog << "Inactive clients will be kicked after " << TIMEOUT << " seconds..." << std::endl;
     }
 
     void send_message(HTTP_request &request, const Client &client) {
@@ -503,7 +518,7 @@ public:
             }
         }
 
-        std::string http_no_body = request.send_response(file_len);
+        std::string http_no_body = request.create_response(file_len);
 
         if (request.code == 302) {
             http_no_body += "Location: ";
@@ -516,7 +531,6 @@ public:
 
         if (request.code == 200 && request.method == "GET") {
             std::string line;
-           // FILE *fs = fopen((base_dir.root_path.string() + request.file).c_str(), "r");
 
             client.send_file((base_dir.root_path.string() + request.file).c_str());
         }
@@ -527,6 +541,7 @@ public:
         bool conn = true;
 
         std::iostream client_stream(&client.get_client_buf());
+
         std::string line;
 
         try {
@@ -580,7 +595,12 @@ int main(int argc, char *argv[]) {
         server.runserver();
     }
     catch (base_dir_exception e) {
-        std::cerr << e.what();
+        std::cerr << e.what() << std::endl;
+
+        exit(EXIT_FAILURE);
+    }
+    catch (corelated_servers_exception e) {
+        std::cerr << e.what() << std::endl;
 
         exit(EXIT_FAILURE);
     }
