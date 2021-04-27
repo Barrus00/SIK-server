@@ -1,4 +1,0 @@
-/home/barrus/Studia/SiK/ZAD-1_poprawa/cmake-build-debug/CMakeFiles/rebuild_cache.dir
-/home/barrus/Studia/SiK/ZAD-1_poprawa/cmake-build-debug/CMakeFiles/edit_cache.dir
-/home/barrus/Studia/SiK/ZAD-1_poprawa/cmake-build-debug/CMakeFiles/server.dir
-/home/barrus/Studia/SiK/ZAD-1_poprawa/cmake-build-debug/CMakeFiles/err.dir

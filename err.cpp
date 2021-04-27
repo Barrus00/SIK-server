@@ -1,3 +1,4 @@
+/* Kod pochodzi z labów moodle, nie jestem jego autorem */
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>

@@ -1,4 +1,0 @@
-/var/lib/snapd/snap/clion/151/bin/cmake/linux/bin/cmake -DCMAKE_BUILD_TYPE=Debug -G "CodeBlocks - Unix Makefiles" /home/barrus/Studia/SiK/ZAD-1_poprawa
--- Configuring done
--- Generating done
--- Build files have been written to: /home/barrus/Studia/SiK/ZAD-1_poprawa/cmake-build-debug

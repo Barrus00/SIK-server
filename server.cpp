@@ -1,5 +1,4 @@
 #include <iostream>
-#include "fstream"
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -8,11 +7,11 @@
 #include <cstring>
 #include <unistd.h>
 #include <regex>
-#include <algorithm>
 #include <filesystem>
 #include <ext/stdio_filebuf.h>
 #include <sys/sendfile.h>
 #include <signal.h>
+#include <unordered_map>
 #include "err.h"
 
 #define C_OK 200
@@ -22,6 +21,7 @@
 #define C_SERV_ERROR 500
 #define C_BAD_METH 501
 
+#define MAX_PORT_N 65535
 
 #define BUFF_SIZE 4096
 #define PORT_NUM 8080
@@ -30,11 +30,11 @@
                         std::cerr << x << std::endl; \
                    }
 
-bool debug = 0;
-
 namespace fs = std::filesystem;
 
 namespace {
+    bool debug = 0;
+
     const std::string HTTP_version = "HTTP/1\\.1";
     const std::string CRLF = "\r\n";
 
@@ -44,19 +44,31 @@ namespace {
 
     struct corelated_servers_exception : public std::exception {
         const char * what() const throw() {
-            return "Corelated servers file not found!";
+            return "Corelated servers file not found!\n";
         }
     };
 
     struct base_dir_exception : public std::exception {
          const char * what() const throw() {
-            return "Base directory not found!";
+            return "Base directory not found!\n";
         }
     };
 
     struct sigpipe_exception : public std::exception {
         const char * what() const throw() {
-            return "Pipe error!";
+            return "Pipe error!\n";
+        }
+    };
+
+    struct invalid_path_exception : public std::exception {
+        const char * what() const throw() {
+            return "Invalid path provided!\n";
+        }
+    };
+
+    struct file_not_found_exception : public std::exception {
+        const char * what() const throw() {
+            return "File not found\n";
         }
     };
 }
@@ -178,15 +190,17 @@ public:
         }
     }
 
-    std::filesystem::path normalized_trimed(const std::filesystem::path& p)
-    {
+    std::filesystem::path normalized_trimed(const std::filesystem::path& p) {
         auto r = p.lexically_normal();
-        if (r.has_filename()) return r;
+
+        if (r.has_filename()) {
+            return r;
+        }
+
         return r.parent_path();
     }
 
-    bool is_subpath_of(const std::filesystem::path& base, const std::filesystem::path& sub)
-    {
+    bool is_subpath_of(const std::filesystem::path& base, const std::filesystem::path& sub) {
         auto b = normalized_trimed(base);
         auto s = normalized_trimed(sub).parent_path();
         auto m = std::mismatch(b.begin(), b.end(),
@@ -196,13 +210,19 @@ public:
     }
 
     std::ifstream check_existence(const std::filesystem::path& file) {
+        const static std::regex path_regex("(/([a-zA-Z0-9.\\-]+))+");
+
         std::filesystem::path full_path(root_path);
 
         full_path += file;
 
+        if (!is_subpath_of(root_path, full_path) || !std::regex_match(file.string(), path_regex)) {
+            throw invalid_path_exception();
+        }
+
         // Check if file exists in local directory.
-        if (is_subpath_of(root_path, full_path) && std::filesystem::exists(full_path)) {
-            std::ifstream  f_stream(full_path.c_str());
+        if (std::filesystem::exists(full_path)) {
+            std::ifstream f_stream(full_path.c_str());
 
             // Check if we can read from the file.
             if (f_stream.good()) {
@@ -211,7 +231,7 @@ public:
         }
 
         debug("File is not located locally")
-        throw C_F_NOTFOUND;
+        throw file_not_found_exception();
     }
 
     std::uintmax_t size(const std::filesystem::path& file) {
@@ -310,7 +330,7 @@ public:
         }
     }
 
-    std::string create_response(std::uintmax_t f_size) {
+    std::string create_response(std::uintmax_t f_size, const std::string &f_location) {
         std::ostringstream response;
 
         response << "HTTP/1.1 " << code << " " << codesDetailed.get_description(code) << CRLF;
@@ -320,37 +340,38 @@ public:
             response << "Content-length: " << f_size << CRLF;
         }
 
-        if (kill) {
-            response << "Connection: close" << CRLF;
+        if (code == 302) {
+            response << "Location: " << f_location << CRLF;
         }
 
         response << "Server: SiK-Zad1" << CRLF;
 
-        if (code != 302) {
-            response << CRLF;
+        if (kill) {
+            response << "Connection: close" << CRLF;
         }
+
+        response << CRLF;
+
 
         return response.str();
     }
 
     bool parse_start_line(const std::string& start_line) {
         if (!check_if_valid_line(start_line)) {
-            debug("LINE NOT ENED WITH CRLF!")
+            debug("LINE NOT ENDED WITH CRLF!")
 
             set_error(C_REQ_ERROR);
 
             return false;
         }
 
-        static const std::regex start_pattern(R"(([^\s]+)\s((/[a-zA-Z0-9.-]+)+)\s)" + HTTP_version + "\r");
+        static const std::regex start_pattern(R"(([^ ]+) (/[^ ]*) )" + HTTP_version + "\r");
 
         std::smatch groups;
 
         if(std::regex_match(start_line, groups, start_pattern)) {
             method = groups[1].str();
-            debug("METHOD: " << method);
             file = groups[2].str();
-            debug("FILE: " << file);
 
             if (method == "GET" || method == "HEAD") {
                 debug("METHOD CORRECT!");
@@ -494,7 +515,7 @@ public:
     }
 
     void send_message(HTTP_request &request, const Client &client) {
-        int file_len = 0;
+        std::uintmax_t file_len = 0;
         std::ifstream f_stream;
         std::string outside_file;
 
@@ -503,32 +524,29 @@ public:
                 f_stream = base_dir.check_existence(request.file);
                 file_len = base_dir.size(request.file);
             }
-            catch (int e) {
+            catch (const file_not_found_exception& e) {
                 outside_file = foreign_resources.find(request.file);
 
                 if (outside_file.empty()) {
-                    request.code = e;
+                    request.code = C_F_NOTFOUND;
                 }
                 else {
                     request.code = C_F_MOVED;
                 }
             }
+            // If this matches, then we know that invalid path has been raised, or an exception from the filesystem
+            // library.
             catch (...) {
-                request.code = 404;
+                request.code = C_F_NOTFOUND;
             }
         }
 
-        std::string http_no_body = request.create_response(file_len);
-
-        if (request.code == 302) {
-            http_no_body += "Location: ";
-            http_no_body += outside_file;
-            http_no_body += CRLF;
-            http_no_body += CRLF;
-        }
+        // Create and send the HTTP start line with associated headers.
+        std::string http_no_body = request.create_response(file_len, outside_file);
 
         client.send_message(http_no_body);
 
+        // If a file was requested, and it exists, then send it's content.
         if (request.code == 200 && request.method == "GET") {
             std::string line;
 
@@ -540,13 +558,15 @@ public:
         Client client(server_socket.get_socket_num());
         bool conn = true;
 
+        // Get client buffer.
         std::iostream client_stream(&client.get_client_buf());
 
         std::string line;
 
+        std::clog << "Connection established, waiting for message...\n";
+
         try {
             while (conn) {
-                std::clog << "Connection established, waiting for message...\n";
                 HTTP_request request;
 
                 while (std::getline(client_stream, line)) {
@@ -563,7 +583,7 @@ public:
                 conn = !request.kill;
             }
         }
-        catch (sigpipe_exception e) {
+        catch (const sigpipe_exception& e) {
             std::cerr << e.what();
         }
 
@@ -572,6 +592,7 @@ public:
 
     void runserver() {
         signal(SIGPIPE, SIG_IGN);
+
         for (;;) {
             accept_client();
         }
@@ -584,22 +605,45 @@ int main(int argc, char *argv[]) {
     if (argc < 3 || argc > 4) {
         std::cerr << "Invalid arguments!\n Usage: "
                      "./file_name <base directory> <name of co-related server file> [optional] <port number>\n";
+
+        exit(EXIT_FAILURE);
     }
 
     if (argc == 4) {
-        port_n = strtol(argv[3], nullptr, 0);
+        size_t number_size;
+
+        try {
+            port_n = std::stoi(argv[3], &number_size);
+        }
+        catch (...) {
+            std::cerr << "Invalid port number format!" << std::endl;
+
+            exit(EXIT_FAILURE);
+        }
+
+        if (number_size != std::string(argv[3]).length()) {
+            std::cerr << "Invalid port number format!" << std::endl;
+
+            exit(EXIT_FAILURE);
+        }
+
+        if (port_n > MAX_PORT_N) {
+            std::cerr << "Provided port number is too big!" << std::endl;
+
+            exit(EXIT_FAILURE);
+        }
     }
 
     try {
         TCP_Server server(argv[1], argv[2], port_n);
         server.runserver();
     }
-    catch (base_dir_exception e) {
+    catch (const base_dir_exception& e) {
         std::cerr << e.what() << std::endl;
 
         exit(EXIT_FAILURE);
     }
-    catch (corelated_servers_exception e) {
+    catch (const corelated_servers_exception& e) {
         std::cerr << e.what() << std::endl;
 
         exit(EXIT_FAILURE);

@@ -1,3 +1,4 @@
+/* Kod pochodzi z labów moodle, nie jestem jego autorem */
 #ifndef _ERR_
 #define _ERR_
 

@@ -1,1 +1,0 @@
-/usr/bin/c++ -g CMakeFiles/ZAD_1_poprawa.dir/main.cpp.o -o ZAD_1_poprawa  liberr.a 
